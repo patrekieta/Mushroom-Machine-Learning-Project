@@ -1,0 +1,213 @@
+---
+title: "Mushroom Classification Supervised Machine Learning"
+format: 
+  html:
+    theme: flatly
+    code-fold: false
+---
+```{r, warning=FALSE}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(tidymodels))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(reshape2))
+
+```
+
+
+```{css, echo = FALSE}
+.scrolling {
+  max-height: 300px;
+  overflow-y: auto;
+  max-width: 600px;
+}
+```
+
+To begin this project we need to first discover or create a dataset to use. After some time of searching, I discovered the Mushroom dataset which includes artificial descriptions of various mushrooms. These mushrooms are generally coded as poisonous or edible, while including their additional characteristics. This data is based upon the Audobon Society Field Guide. This guide claims that there are no easy rules for determining the edibility of a mushroom. Let's see if that holds true for more advanced methods of supervised machine learning. For more information about this data, it can be found at the [UC Irvine Machine Learning Repository.](https://archive.ics.uci.edu/dataset/73/mushroom)
+
+First, we first need to load in our data. 
+
+```{r}
+#| attr-output: "style='font-size: 0.7em'"
+#| class-output: scrolling
+data <- read.csv("data/mushrooms.csv")
+
+head(data)
+summary(data)
+
+```
+
+
+
+Before we get too far, we should make sure we know what our column names are. 
+```{r}
+colnames(data)
+```
+
+We know based on the data description that the column "class" is coded as e: edible and p: poisonous. This see what our distribution of mushrooms looks like. 
+
+```{r}
+
+distribution <- table(data$class)
+distribution
+distribution[1] / (distribution[1] + distribution[2])
+distribution[2] / (distribution[1] + distribution[2])
+
+```
+
+This looks like a pretty even split so there probably isn't much wrangling that needs to occur with this data. Let's also check for any missing values in the data. 
+
+```{r}
+anyNA(data)
+```
+We can see that there are no missing values in this dataset. Now we can better understand our data. What are the other columns coded as? We can use the table that we generate to compare with the provided coding information from the UCI Repository. 
+
+```{r}
+#| fig-format: svg
+#| fig-width: 10
+#| fig-height: 16
+#| column: page
+
+data_long <- data %>% gather(data, "key", class:habitat)
+colnames(data_long) <- c("group", "value")
+data_long <- data_long[data_long$group != "class",]
+
+
+ggplot(data_long) +
+  geom_bar(aes(x = value, group = group)) +
+  facet_wrap(~group, ncol = 4, scales = "free") +
+  theme_minimal()
+
+```
+
+![Mushroom Column Codes](data/Mushroom Coding Table.png)
+![](data/Mushroom Coding Table 2.png)
+![](data/Mushroom Coding Table 3.png)
+
+Now that we have seen our data, let's remove the column for veil.type because it only has one factor. This isn't useful for our model and should help simplify our data. 
+
+```{r}
+### Remove veil type because it only has 1 factor
+data <- subset(data, select = -c(veil.type))
+
+```
+
+We can also see that some of our variables are predominantly one value. Let's take a closer look at these predictors to see if they might have an impact on our model if it is worth removing them in order to prevent an overly weighted predictor from impacting the model. 
+
+
+```{r}
+#| class-output: scrolling
+#| 
+
+ggplot(data, aes(x = class, y = gill.attachment, col = class)) + 
+  geom_jitter(alpha = 0.5) + 
+  ggtitle("Gill Attachment") + 
+  scale_color_manual(breaks = c("e", "p"), 
+                     labels = c("Edible", "Poisonous"),
+                     values = c("green", "red"))
+
+table(data$class, data$gill.attachment)
+
+```
+Here we can see a pretty even split between the edible and poisonous classes. There appears to be a tendency for attached veils to be more often edible rather than poisonous
+
+```{r}
+#| class-output: scrolling
+#| 
+
+ggplot(data, aes(x = class, y = gill.spacing, col = class)) + 
+  geom_jitter(alpha = 0.5) + 
+  ggtitle("Gill Attachment") + 
+  scale_color_manual(breaks = c("e", "p"), 
+                     labels = c("Edible", "Poisonous"),
+                     values = c("green", "red"))
+table(data$class, data$gill.spacing)
+
+
+```
+
+This is also pretty split when considering gill spacing. Here we can see a tendency for crowded gills to be edible more often. 
+
+
+```{r}
+#| class-output: scrolling
+#| 
+
+ggplot(data, aes(x = class, y = ring.number, col = class)) + 
+  geom_jitter(alpha = 0.5) + 
+  ggtitle("Gill Attachment") + 
+  scale_color_manual(breaks = c("e", "p"), 
+                     labels = c("Edible", "Poisonous"),
+                     values = c("green", "red"))
+table(data$class, data$ring.number)
+
+data <- subset(data, select = -c(ring.number))
+
+```
+Here we can see a pretty big difference for mushrooms that have no ring numbers. This data might indicate that all mushrooms that have no rings would be poisonous but some research shows that this is not true. Therefore, I have removed this column from consideration in the model. 
+
+```{r}
+#| class-output: scrolling
+#| 
+
+ggplot(data, aes(x = class, y = veil.color, col = class)) + 
+  geom_jitter(alpha = 0.5) + 
+  ggtitle("Gill Attachment") + 
+  scale_color_manual(breaks = c("e", "p"), 
+                     labels = c("Edible", "Poisonous"),
+                     values = c("green", "red"))
+table(data$class, data$veil.color)
+
+data <- subset(data, select = -c(veil.color))
+
+```
+
+In veil color we also see strong weighting towards a specific class based on the veil color. Therefore, I have removed this column from consideration in the model as well. 
+
+A fun fact about mushrooms is that typically only the ones with a bell shape. Let's take a look and see if that is true with our data. 
+
+```{r}
+#| class-output: scrolling
+#| 
+
+ggplot(data, aes(x = cap.shape, y = cap.color, col = class)) + 
+  geom_jitter(alpha = 0.5) + 
+  ggtitle("Cap Shape vs Cap Color") + 
+  scale_color_manual(breaks = c("e", "p"), 
+                     labels = c("Edible", "Poisonous"),
+                     values = c("green", "red"))
+
+
+```
+
+It looks like this is mostly true but maybe we should avoid the pink and buff colored mushrooms. We can continue with this style graph to get a better idea of how our data looks. Based on some research, we know that odor can also be a strong indicator. Let's see how this looks in a graph. 
+
+```{r}
+#| class-output: scrolling
+#| 
+
+ggplot(data, aes(x = class, y = odor, col = class)) + 
+  geom_jitter(alpha = 0.5) + 
+  ggtitle("Gill Attachment") + 
+  scale_color_manual(breaks = c("e", "p"), 
+                     labels = c("Edible", "Poisonous"),
+                     values = c("green", "red"))
+table(data$class, data$odor)
+
+
+```
+
+It would appear that odor is a strong separator between out two classes. This might be something to remember as we start examining some models. 
+
+At this point, we have a pretty good idea of how our data looks. We can look further into the data but we don't want our knowledge of the data to influence our models too much. To begin with the models, we need to separate our data into a training set and a test set. This will allow us to test the models to get a better idea of accuracy. We will use a simple 80-20 split to do this. 
+
+
+```{r}
+
+ndx <- sample(1:nrow(data), round(0.8*nrow(data)))
+
+train <- data[ndx,]
+test <- data[-ndx,]
+
+```
+
+
