@@ -5,8 +5,6 @@ format:
     theme: flatly
     code-fold: false
     embed-resources: true
-  ipynb:
-    ipynb-output: all
 ---
 ```{r, warning=FALSE}
 suppressPackageStartupMessages(library(tidyverse))
