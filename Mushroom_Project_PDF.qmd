@@ -1,0 +1,342 @@
+---
+title: "Mushroom Classification Supervised Machine Learning"
+format: 
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
+---
+```{r, warning=FALSE}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(tidymodels))
+suppressPackageStartupMessages(library(ggplot2))
+suppressPackageStartupMessages(library(reshape2))
+suppressPackageStartupMessages(library(caret))
+suppressPackageStartupMessages(library(randomForest))
+suppressPackageStartupMessages(library(e1071))
+suppressPackageStartupMessages(library(reprtree))
+set.seed(123)
+
+```
+
+
+```{css, echo = FALSE}
+.scrolling {
+  max-height: 300px;
+  overflow-y: auto;
+  max-width: 600px;
+}
+```
+# Introduction
+
+To begin this project we need to first discover or create a dataset to use. After some time of searching, I discovered the Mushroom dataset which includes artificial descriptions of various mushrooms. These mushrooms are generally coded as poisonous or edible, while including their additional characteristics. This data is based upon the Audobon Society Field Guide. This guide claims that there are no easy rules for determining the edibility of a mushroom. Let's see if that holds true for more advanced methods of supervised machine learning. For more information about this data, it can be found at the [UC Irvine Machine Learning Repository.](https://archive.ics.uci.edu/dataset/73/mushroom)
+
+First, we first need to load in our data. 
+
+```{r}
+#| attr-output: "style='font-size: 0.7em'"
+#| class-output: scrolling
+data <- read.csv("data/mushrooms.csv")
+
+head(data)
+summary(data)
+
+```
+
+
+
+Before we get too far, we should make sure we know what our column names are. 
+```{r}
+colnames(data)
+```
+
+We know based on the data description that the column "class" is coded as e: edible and p: poisonous. This see what our distribution of mushrooms looks like. 
+
+```{r}
+
+distribution <- table(data$class)
+distribution
+distribution[1] / (distribution[1] + distribution[2])
+distribution[2] / (distribution[1] + distribution[2])
+
+```
+
+This looks like a pretty even split so there probably isn't much wrangling that needs to occur with this data. Let's also check for any missing values in the data. 
+
+```{r}
+anyNA(data)
+```
+We can see that there are no missing values in this dataset. Now we can better understand our data. What are the other columns coded as? We can use the table that we generate to compare with the provided coding information from the UCI Repository. 
+
+```{r}
+#| fig-format: png
+#| fig-width: 10
+#| fig-height: 16
+#| column: page
+
+data_long <- data %>% gather(data, "key", class:habitat)
+colnames(data_long) <- c("group", "value")
+data_long <- data_long[data_long$group != "class",]
+
+
+ggplot(data_long) +
+  geom_bar(aes(x = value, group = group)) +
+  facet_wrap(~group, ncol = 4, scales = "free") +
+  theme_minimal()
+
+```
+
+![Mushroom Column Codes](data/Mushroom Coding Table.png)
+![](data/Mushroom Coding Table 2.png)
+![](data/Mushroom Coding Table 3.png)
+
+Now that we have seen our data, let's remove the column for veil.type because it only has one factor. This isn't useful for our model and should help simplify our data. 
+
+```{r}
+### Remove veil type because it only has 1 factor
+data <- subset(data, select = -c(veil.type))
+
+```
+
+## Exploratory Analysis
+
+We can also see that some of our variables are predominantly one value. Let's take a closer look at these predictors to see if they might have an impact on our model if it is worth removing them in order to prevent an overly weighted predictor from impacting the model. 
+
+
+```{r}
+#| class-output: scrolling
+#| 
+
+ggplot(data, aes(x = class, y = gill.attachment, col = class)) + 
+  geom_jitter(alpha = 0.5) + 
+  ggtitle("Gill Attachment") + 
+  scale_color_manual(breaks = c("e", "p"), 
+                     labels = c("Edible", "Poisonous"),
+                     values = c("green", "red"))
+
+table(data$class, data$gill.attachment)
+
+```
+Here we can see a pretty even split between the edible and poisonous classes. There appears to be a tendency for attached veils to be more often edible rather than poisonous
+
+```{r}
+#| class-output: scrolling
+#| 
+
+ggplot(data, aes(x = class, y = gill.spacing, col = class)) + 
+  geom_jitter(alpha = 0.5) + 
+  ggtitle("Gill Attachment") + 
+  scale_color_manual(breaks = c("e", "p"), 
+                     labels = c("Edible", "Poisonous"),
+                     values = c("green", "red"))
+table(data$class, data$gill.spacing)
+
+
+```
+
+This is also pretty split when considering gill spacing. Here we can see a tendency for crowded gills to be edible more often. 
+
+
+```{r}
+#| class-output: scrolling
+#| 
+
+ggplot(data, aes(x = class, y = ring.number, col = class)) + 
+  geom_jitter(alpha = 0.5) + 
+  ggtitle("Gill Attachment") + 
+  scale_color_manual(breaks = c("e", "p"), 
+                     labels = c("Edible", "Poisonous"),
+                     values = c("green", "red"))
+table(data$class, data$ring.number)
+
+data <- subset(data, select = -c(ring.number))
+
+```
+Here we can see a pretty big difference for mushrooms that have no ring numbers. This data might indicate that all mushrooms that have no rings would be poisonous but some research shows that this is not true. Therefore, I have removed this column from consideration in the model. 
+
+```{r}
+#| class-output: scrolling
+#| 
+
+ggplot(data, aes(x = class, y = veil.color, col = class)) + 
+  geom_jitter(alpha = 0.5) + 
+  ggtitle("Gill Attachment") + 
+  scale_color_manual(breaks = c("e", "p"), 
+                     labels = c("Edible", "Poisonous"),
+                     values = c("green", "red"))
+table(data$class, data$veil.color)
+
+data <- subset(data, select = -c(veil.color))
+
+```
+
+In veil color we also see strong weighting towards a specific class based on the veil color. Therefore, I have removed this column from consideration in the model as well. 
+
+A fun fact about mushrooms is that typically only the ones with a bell shape. Let's take a look and see if that is true with our data. 
+
+```{r}
+#| class-output: scrolling
+#| 
+
+ggplot(data, aes(x = cap.shape, y = cap.color, col = class)) + 
+  geom_jitter(alpha = 0.5) + 
+  ggtitle("Cap Shape vs Cap Color") + 
+  scale_color_manual(breaks = c("e", "p"), 
+                     labels = c("Edible", "Poisonous"),
+                     values = c("green", "red"))
+
+
+```
+
+It looks like this is mostly true but maybe we should avoid the pink and buff colored mushrooms. We can continue with this style graph to get a better idea of how our data looks. Based on some research, we know that odor can also be a strong indicator. Let's see how this looks in a graph. 
+
+```{r}
+#| class-output: scrolling
+#| 
+
+ggplot(data, aes(x = class, y = odor, col = class)) + 
+  geom_jitter(alpha = 0.5) + 
+  ggtitle("Gill Attachment") + 
+  scale_color_manual(breaks = c("e", "p"), 
+                     labels = c("Edible", "Poisonous"),
+                     values = c("green", "red"))
+table(data$class, data$odor)
+
+
+```
+
+It would appear that odor is a strong separator between out two classes. This might be something to remember as we start examining some models. 
+
+
+# Models
+
+## Data Split
+
+At this point, we have a pretty good idea of how our data looks. We can look further into the data but we don't want our knowledge of the data to influence our models too much. To begin with the models, we need to separate our data into a training set and a test set. This will allow us to test the models to get a better idea of accuracy. We will use a simple 80-20 split to do this. 
+
+
+```{r}
+
+# data$class <- ifelse(data$class == "p", 1, 0)
+col_names <- names(data)
+data[,col_names] <- lapply(data[,col_names] , factor)
+
+
+ndx <- sample(1:nrow(data), round(0.8*nrow(data)))
+
+train <- data[ndx,]
+test <- data[-ndx,]
+
+```
+
+## Generalized Linear Models
+
+Let's begin with a basic generalized linear model to see what we can learn about the data. Given the binary outcome of our data, we will be using the binomial distribution to determine the probabilities. 
+
+```{r}
+
+glm_mod <- glm("class ~ .", data = train, family = "binomial")
+
+pred <- predict(glm_mod, newdata = test, type = "response")
+pred <- ifelse(pred > 0.50, "p", "e")
+
+table(pred, test$class)
+
+
+```
+
+When comparing our predictions from the model versus the actual data in our test dataset, we can see we have a perfect prediction. However, this could also be a sign of overfitting. This is especially true as we have considered all columns in the model. Let's try reducing our model to the more impactful predictors which we have found up above. 
+
+```{r}
+glm_mod_reduce <- glm("class ~ cap.shape + cap.color + odor + ring.type + stalk.root + stalk.shape + cap.surface", data = train, family = "binomial")
+
+pred <- predict(glm_mod_reduce, newdata = test, type = "response")
+pred <- ifelse(pred > 0.50, "p", "e")
+
+
+
+table(pred, test$class)
+
+
+
+```
+
+
+This model is still pretty good but we can see an example of a type 2 error as well as 2 examples of a type 1 error. This means that our model is still not perfect though. By using a simple anova comparison between the two models. We can also see that the reduced model is preferred over the full model. 
+
+```{r}
+anova(glm_mod, glm_mod_reduce)
+
+plot(glm_mod)
+
+plot(glm_mod_reduce)
+
+```
+
+
+
+## Support Vector Machine
+
+Now we will can try out some other models. Let's try a SVM model. SVM models can be excellent at find the optimal decision boundary when dealing with classification problems. We can expect our SVM model to perform better than our GLM due to the high dimensionality of the data. 
+
+```{r}
+
+svm_mod <- svm(class ~. , data=train)
+summary(svm_mod)
+
+
+
+svm_pred <- predict(svm_mod, newdata = test)
+
+table(svm_pred, test$class)
+
+```
+
+This SVM model performs better than the GLM. We see only one example of a type 1 error which is an improved result. Unfortunately, due to the multiple dimensions in our data and the fact that it is discrete, it is difficult to create a classification plot. 
+
+## Random Forest
+
+Now lets try a random forest model. These trees are known to be good models when dealing with classification problems. Will it be any better than the previous models? 
+
+```{r}
+
+
+rf_mod <- randomForest(class ~ ., ntree=1000, data = train)
+
+
+```
+
+
+```{r}
+varImpPlot(rf_mod)
+```
+
+
+With our random forest we can take a look at what our most important predictors are. As we guessed during our initial exploration, odor has a very strong affect on the model. Spore print color also appears to be a strong predictor which is interesting as we did not choose to use it in our previous GLM model. Below is a plot of the tree that was created. 
+
+```{r}
+plot.getTree(rf_mod, main = "Random Forest Tree")
+```
+
+
+
+Finally we can create our predictions and compare it against our test data. 
+
+```{r}
+
+rf_pred <- predict(rf_mod, newdata = test)
+
+table(rf_pred, test$class)
+
+```
+
+
+Now we finally have a perfect match between our model and the test data. This means that the random forest model was the best performing model of the three that were tested. 
+
+# Conclusion
+
+While all of these model do a great job at the problem we are attempting to solve, it appears that the random forest model has handled the classification with the most accuracy. With some additional tuning, I'm sure that we could get perfect results from all 3 models. In addition to its accuracy, I also find the random forest tree to be the easiest to understand the result. Theoretically anyone could take the tree output and use it to get a decent result at picking mushrooms in the wilderness. 
+
+If we were to expand on this problem, we would want to consider additional training with new data. Based on the initial exploration graphs, we can see that some predictors have very small sample sizes which could result in some incorrect assumptions in all our models. These models give us a great start to understanding the toxicity of mushrooms but I would still prefer a professional joins me before I stake my life on any of these models.
+
+[Github Link](https://github.com/patrekieta/Mushroom-Machine-Learning-Project)
